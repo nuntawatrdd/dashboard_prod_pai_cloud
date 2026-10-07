@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Prodpai Cloud - Status</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+
+        async function loadData() {
+            try {
+                const res = await fetch('/api/data');
+                const data = await res.json();
+                
+                if (Object.keys(data).length === 0) {
+                    document.getElementById('diagram').innerHTML = "Waiting for Terraform CI/CD to send data...";
+                    document.getElementById('json-log').textContent = "No data received yet.";
+                    return;
+                }
+
+                document.getElementById('update-time').innerText = data.update_time || new Date().toLocaleString();
+                
+                // --- พิมพ์ Raw JSON ลงในกล่อง Log ---
+                document.getElementById('json-log').textContent = JSON.stringify(data, null, 2);
+                
+                // --- Dynamic Mermaid Graph Generation ---
+                let graphDef = 'graph TD\n';
+                graphDef += 'Internet([🌐 Internet])\n';
+                
+                if (data.waf) {
+                    graphDef += `Internet --> WAF{🛡️ AWS WAF<br/>${data.waf.name || 'WAF'}}\n`;
+                    graphDef += `WAF --> ALB\n`;
+                } else {
+                     graphDef += `Internet --> ALB\n`;
+                }
+
+                if (data.load_balancer) {
+                    graphDef += `ALB[⚖️ App Load Balancer<br/>${data.load_balancer.dns_name || ''}<br/><br/>🛡️ SG: ${data.security_groups?.alb || ''}]\n`;
+                    graphDef += `ALB --> TG((🎯 Target Group))\n`;
+                    graphDef += `TG --> ASG\n`;
+                }
+                
+                if (data.auto_scaling) {
+                     graphDef += `ASG[[⚙️ Auto Scaling Group<br/>${data.auto_scaling.name || ''}<br/>Capacity: ${data.auto_scaling.desired_capacity || ''}]]\n`;
+                } else {
+                     graphDef += `ASG[[⚙️ Compute Instances]]\n`;
+                }
+
+                if (data.vpc) {
+                    graphDef += `subgraph VPC [☁️ AWS VPC: ${data.vpc.id || 'N/A'}]\n`;
+                    
+                    if (data.ec2_instances && Array.isArray(data.ec2_instances)) {
+                        data.ec2_instances.forEach((instance, index) => {
+                            let instanceName = `EC2_${index}`;
+                            graphDef += `ASG --> ${instanceName}((💻 Active EC2: ${instance.id}<br/>Status: ${instance.status}))\n`;
+                        });
+                    } else {
+                         graphDef += `ASG --> EC2_Dummy((💻 EC2 Instances...))\n`;
+                    }
+                    
+                    if(data.image_builder) {
+                         graphDef += `Builder[/🛠️ Image Builder<br/>ID: ${data.image_builder.instance_id}<br/>AMI: ${data.image_builder.ami_id}<br/><br/>☠️ Status: Terminated /]\n`;
+                    }
+                    graphDef += `end\n`;
+                }
+
+                if (data.lambda_functions && Array.isArray(data.lambda_functions)) {
+                    graphDef += `CloudWatch((📊 CloudWatch)) -.->|Alert| LambdaGroup{Lambda Functions}\n`;
+                    data.lambda_functions.forEach((lambda, index) => {
+                         let lambdaNode = `Lambda_${index}`;
+                         graphDef += `LambdaGroup --> ${lambdaNode}[⚡ Lambda<br/>${lambda.name}]\n`;
+                    });
+                }
+                
+                const diagramContainer = document.getElementById('diagram');
+                diagramContainer.innerHTML = graphDef;
+                document.getElementById('diagram').removeAttribute('data-processed');
+                await mermaid.run({ nodes: [diagramContainer] });
+            } catch (error) {
+                console.error("Error loading data:", error);
+            }
+        }
+
+        setInterval(loadData, 5000);
+        loadData();
+    </script>
+</head>
+<body class="bg-gray-900 text-white font-sans p-6 min-h-screen">
+    <div class="max-w-7xl mx-auto">
+        <h1 class="text-4xl font-bold text-blue-400 mb-2">☁️ Prodpai Cloud Infrastructure</h1>
+        <p class="text-gray-400 mb-6">Last Terraform Apply: <span id="update-time" class="text-green-400 font-mono">Loading...</span></p>
+        
+        <!-- แบ่ง Layout เป็น 2 คอลัมน์ (ซ้าย Diagram, ขวา JSON Log) -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            
+            <!-- ส่วนแสดง Diagram (พื้นที่ 2 ส่วน) -->
+            <div class="lg:col-span-2 bg-gray-800 p-8 rounded-xl shadow-2xl border border-gray-700 overflow-x-auto">
+                <h2 class="text-xl font-bold mb-4 border-b border-gray-700 pb-2">Architecture Diagram</h2>
+                <div id="diagram" class="flex justify-center text-lg">
+                    Loading Architecture Diagram...
+                </div>
+            </div>
+
+            <!-- ส่วนแสดง Raw JSON Log (พื้นที่ 1 ส่วน) -->
+            <div class="bg-gray-800 p-6 rounded-xl shadow-2xl border border-gray-700 flex flex-col max-h-[600px]">
+                <div class="flex justify-between items-center border-b border-gray-700 pb-2 mb-4">
+                    <h2 class="text-xl font-bold">Incoming JSON Data</h2>
+                    <span class="text-xs bg-green-900 text-green-300 px-2 py-1 rounded">Auto-refresh</span>
+                </div>
+                <!-- กล่อง Scrollable สำหรับ Code -->
+                <div class="bg-black p-4 rounded-lg overflow-y-auto flex-grow text-xs font-mono">
+                    <pre id="json-log" class="text-green-400 whitespace-pre-wrap break-words">Waiting for data...</pre>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</body>
+</html>
